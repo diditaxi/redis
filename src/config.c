@@ -1818,9 +1818,9 @@ int rewriteConfig(char *path) {
      * the rewrite state. */
 
     rewriteConfigYesNoOption(state,"daemonize",server.daemonize,0);
-    rewriteConfigYesNoOption(state,"accesslog",server.daemonize,0);
-    rewriteConfigYesNoOption(state,"flushable",server.daemonize,0);
-    rewriteConfigYesNoOption(state,"tracestates",server.daemonize,0);
+    rewriteConfigYesNoOption(state,"accesslog",server.accesslog,0);
+    rewriteConfigYesNoOption(state,"flushable",server.flushable,0);
+    rewriteConfigYesNoOption(state,"tracestates",server.tracestates,0);
     rewriteConfigStringOption(state,"configaddress",server.configaddress,REDIS_DEFAULT_CONFIG_ADDR);
     rewriteConfigStringOption(state,"access_whitelist_file",server.access_whitelist_file,"");
     rewriteConfigStringOption(state,"pidfile",server.pidfile,REDIS_DEFAULT_PID_FILE);
