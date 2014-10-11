@@ -16,6 +16,7 @@ set ::all_tests {
     unit/auth
     unit/protocol
     unit/basic
+    unit/trace
     unit/scan
     unit/type/list
     unit/type/list-2

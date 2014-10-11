@@ -102,6 +102,7 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REDIS_REPL_BACKLOG_MIN_SIZE (1024*16)          /* 16k */
 #define REDIS_BGSAVE_RETRY_DELAY 5 /* Wait a few secs before trying again. */
 #define REDIS_DEFAULT_PID_FILE "/var/run/redis.pid"
+#define REDIS_DEFAULT_CONFIG_ADDR "127.0.0.1"
 #define REDIS_DEFAULT_SYSLOG_IDENT "redis"
 #define REDIS_DEFAULT_CLUSTER_CONFIG_FILE "nodes.conf"
 #define REDIS_DEFAULT_DAEMONIZE 0
@@ -220,6 +221,18 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REDIS_AOF_ON 1              /* AOF is on */
 #define REDIS_AOF_WAIT_REWRITE 2    /* AOF waits rewrite to start appending */
 
+/*Flushable states*/
+#define REDIS_FLUSHABLE_ON 1
+#define REDIS_FLUSHABLE_OFF 0
+
+/*ACCESSLOG states*/
+#define REDIS_ACCESSLOG_ON 1
+#define REDIS_ACCESSLOG_OFF 0
+
+/* Trace states */
+#define REDIS_TRACE_ON 1
+#define REDIS_TRACE_OFF 0
+
 /* Client flags */
 #define REDIS_SLAVE (1<<0)   /* This client is a slave server */
 #define REDIS_MASTER (1<<1)  /* This client is a master server */
@@ -329,6 +342,7 @@ typedef long long mstime_t; /* millisecond time type. */
 
 /* Scripting */
 #define REDIS_LUA_TIME_LIMIT 5000 /* milliseconds */
+#define REDIS_DEFAULT_TRACE_COMMAND_LIMIT 10000
 
 /* Units */
 #define UNIT_SECONDS 0
@@ -350,6 +364,9 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REDIS_PROPAGATE_NONE 0
 #define REDIS_PROPAGATE_AOF 1
 #define REDIS_PROPAGATE_REPL 2
+
+/* Trace command threshold */
+#define REDIS_TRACE_KEY_LIMIT 50
 
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes. */
@@ -488,6 +505,8 @@ typedef struct redisClient {
     long long reploff;      /* replication offset if this is our master */
     long long repl_ack_off; /* replication ack offset, if this is a slave */
     long long repl_ack_time;/* replication ack time, if this is a slave */
+    char remote_ip[REDIS_IP_STR_LEN];
+    int remote_port;
     char replrunid[REDIS_RUN_ID_SIZE+1]; /* master run id if this is a master */
     int slave_listening_port; /* As configured with: SLAVECONF listening-port */
     multiState mstate;      /* MULTI/EXEC state */
@@ -656,6 +675,13 @@ struct redisServer {
     size_t client_max_querybuf_len; /* Limit for client query buffer length */
     int dbnum;                      /* Total number of configured DBs */
     int daemonize;                  /* True if running as a daemon */
+    int flushable;                  /* True if flushall and flushdb command works*/
+    int accesslog;                  /* True if want to print accesslog*/
+    dict *access_whitelist;         /* Dict contains ip addresses can access this server*/
+    char *access_whitelist_file;    /* Config file contains ip addresses can access this server*/
+    dict *trace_keys;               /* Dict contains keys to trace*/
+    int trace_command_limit;        /* Limits of each trace key's commands number*/
+    int tracestates;                /* True if trace function is on*/
     clientBufferLimitsConfig client_obuf_limits[REDIS_CLIENT_TYPE_COUNT];
     /* AOF persistence */
     int aof_state;                  /* REDIS_AOF_(ON|OFF|WAIT_REWRITE) */
@@ -723,6 +749,7 @@ struct redisServer {
     /* Replication (slave) */
     char *masterauth;               /* AUTH with this password with master */
     char *masterhost;               /* Hostname of master */
+    char *configaddress;            /* ip address can run config command*/
     int masterport;                 /* Port of master */
     int repl_timeout;               /* Timeout after N seconds of master idle */
     redisClient *master;     /* Client that is master for this slave */
@@ -912,7 +939,7 @@ size_t redisPopcount(void *s, long count);
 void redisSetProcTitle(char *title);
 
 /* networking.c -- Networking and Client related operations */
-redisClient *createClient(int fd);
+redisClient *createClient(int fd, const char* remote_ip, int remote_port);
 void closeTimedoutClients(void);
 void freeClient(redisClient *c);
 void freeClientAsync(redisClient *c);
@@ -1238,6 +1265,10 @@ char *redisGitDirty(void);
 uint64_t redisBuildId(void);
 
 /* Commands prototypes */
+void traceaddCommand(redisClient *c);
+void tracedelCommand(redisClient *c);
+void tracekeysCommand(redisClient *c);
+void traceshowCommand(redisClient *c);
 void authCommand(redisClient *c);
 void pingCommand(redisClient *c);
 void echoCommand(redisClient *c);

@@ -50,7 +50,7 @@ int listMatchObjects(void *a, void *b) {
     return equalStringObjects(a,b);
 }
 
-redisClient *createClient(int fd) {
+redisClient *createClient(int fd, const char* remote_ip, int remote_port) {
     redisClient *c = zmalloc(sizeof(redisClient));
 
     /* passing -1 as fd it is possible to create a non connected client.
@@ -92,6 +92,11 @@ redisClient *createClient(int fd) {
     c->reploff = 0;
     c->repl_ack_off = 0;
     c->repl_ack_time = 0;
+    if (remote_ip)
+    {
+        memcpy(&(c->remote_ip[0]), remote_ip, REDIS_IP_STR_LEN);
+        c->remote_port = remote_port;
+    }
     c->slave_listening_port = 0;
     c->reply = listCreate();
     c->reply_bytes = 0;
@@ -537,9 +542,21 @@ void copyClientOutputBuffer(redisClient *dst, redisClient *src) {
 }
 
 #define MAX_ACCEPTS_PER_CALL 1000
-static void acceptCommonHandler(int fd, int flags) {
+static void acceptCommonHandler(int fd, int flags, const char* remote_ip, int remote_port) {
+    /* filter by white list*/
+    if (remote_ip) {
+        sds sds_remote_ip = sdsnew(remote_ip);
+        if (server.access_whitelist && dictFind(server.access_whitelist, sds_remote_ip) == NULL) {
+            redisLog(REDIS_WARNING,"Refused: ip [%s] is not in access whitelist", remote_ip);
+            close(fd); /* May be already closed, just ignore errors */
+            sdsfree(sds_remote_ip);
+            return;
+        }
+        sdsfree(sds_remote_ip);
+    }
+
     redisClient *c;
-    if ((c = createClient(fd)) == NULL) {
+    if ((c = createClient(fd, remote_ip, remote_port)) == NULL) {
         redisLog(REDIS_WARNING,
             "Error registering fd event for the new client: %s (fd=%d)",
             strerror(errno),fd);
@@ -581,7 +598,7 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         redisLog(REDIS_VERBOSE,"Accepted %s:%d", cip, cport);
-        acceptCommonHandler(cfd,0);
+        acceptCommonHandler(cfd, 0, cip, cport);
     }
 }
 
@@ -600,7 +617,7 @@ void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         redisLog(REDIS_VERBOSE,"Accepted connection to %s", server.unixsocket);
-        acceptCommonHandler(cfd,REDIS_UNIX_SOCKET);
+        acceptCommonHandler(cfd,REDIS_UNIX_SOCKET, NULL, 0);
     }
 }
 

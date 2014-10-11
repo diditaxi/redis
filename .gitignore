@@ -25,3 +25,7 @@ deps/lua/src/liblua.a
 .make-*
 .prerequisites
 *.dSYM
+tags
+src/cscope.out
+src/cscope.in.out
+src/cscope.po.out

@@ -274,6 +274,10 @@ struct redisCommand redisCommandTable[] = {
     {"pfcount",pfcountCommand,-2,"w",0,NULL,1,1,1,0,0},
     {"pfmerge",pfmergeCommand,-2,"wm",0,NULL,1,-1,1,0,0},
     {"pfdebug",pfdebugCommand,-3,"w",0,NULL,0,0,0,0,0},
+    {"traceadd",traceaddCommand,-2,"wm",0,NULL,1,-1,1,0,0},
+    {"tracedel",tracedelCommand,-2,"w",0,NULL,1,-1,1,0,0},
+    {"tracekeys",tracekeysCommand,1,"r",0,NULL,1,1,1,0,0},
+    {"traceshow",traceshowCommand,2,"r",0,NULL,1,1,1,0,0},
     {"latency",latencyCommand,-2,"arslt",0,NULL,0,0,0,0,0}
 };
 
@@ -580,6 +584,16 @@ dictType keylistDictType = {
     NULL,                       /* val dup */
     dictObjKeyCompare,          /* key compare */
     dictRedisObjectDestructor,  /* key destructor */
+    dictListDestructor          /* val destructor */
+};
+
+/* trace */
+dictType commandlistDictType = {
+    dictSdsCaseHash,            /* hash function */
+    NULL,                       /* key dup */
+    NULL,                       /* val dup */
+    dictSdsKeyCaseCompare,      /* key compare */
+    dictSdsDestructor,          /* key destructor */
     dictListDestructor          /* val destructor */
 };
 
@@ -1346,6 +1360,14 @@ void initServerConfig() {
     server.rdb_filename = zstrdup(REDIS_DEFAULT_RDB_FILENAME);
     server.aof_filename = zstrdup(REDIS_DEFAULT_AOF_FILENAME);
     server.requirepass = NULL;
+    server.configaddress = NULL;
+    server.flushable = REDIS_FLUSHABLE_OFF;
+    server.accesslog = REDIS_ACCESSLOG_OFF;
+    server.access_whitelist = NULL;
+    server.access_whitelist_file = NULL;
+    server.trace_keys = dictCreate(&commandlistDictType,NULL);
+    server.trace_command_limit = REDIS_DEFAULT_TRACE_COMMAND_LIMIT;
+    server.tracestates = REDIS_TRACE_OFF;
     server.rdb_compression = REDIS_DEFAULT_RDB_COMPRESSION;
     server.rdb_checksum = REDIS_DEFAULT_RDB_CHECKSUM;
     server.stop_writes_on_bgsave_err = REDIS_DEFAULT_STOP_WRITES_ON_BGSAVE_ERROR;
@@ -1972,8 +1994,42 @@ void call(redisClient *c, int flags) {
             propagate(rop->cmd, rop->dbid, rop->argv, rop->argc, rop->target);
         }
         redisOpArrayFree(&server.also_propagate);
+    } server.stat_numcommands++;
+}
+
+void recordTraceKeys(redisClient *c) {
+    dictIterator *di = dictGetIterator(server.trace_keys);
+    dictEntry *de;
+    list *cmds = NULL;
+    
+    sds buf = sdsempty(); 
+    sds key_record = sdsempty(); 
+    
+    char datetime[200];
+    struct timeval tv;
+    gettimeofday(&tv,NULL);
+    strftime(datetime, sizeof(datetime), "%Y-%m-%d %H:%M:%S", localtime(&tv.tv_sec));
+    key_record = sdscatprintf(key_record, "%s, %s:%d, ", datetime, (char *)c->remote_ip, c->remote_port);
+    int i = 0;
+    for (i = 0; i < c->argc - 1; i++) {
+        buf = sdscatprintf(buf, "%s ", (char *)c->argv[i]->ptr);
     }
-    server.stat_numcommands++;
+    buf = sdscatprintf(buf, "%s", (char *)c->argv[i]->ptr);
+
+    while((de = dictNext(di)) != NULL) {
+        sds key = dictGetKey(de);
+        if (strstr(buf, key) != NULL) {
+            cmds = dictGetVal(de);
+            int length = listLength(cmds);
+            if (length > 0 && length >= server.trace_command_limit) {
+                listDelNode(cmds, listFirst(cmds));
+            } 
+            listAddNodeTail(cmds, sdsdup(sdscatprintf(key_record, "%s", buf))); 
+        }
+    }
+    dictReleaseIterator(di);
+    sdsfree(buf);
+    sdsfree(key_record);
 }
 
 /* If this function gets called we already read a whole
@@ -1989,6 +2045,29 @@ int processCommand(redisClient *c) {
      * go through checking for replication and QUIT will cause trouble
      * when FORCE_REPLICATION is enabled and would be implemented in
      * a regular command proc. */
+    if (server.accesslog)
+    {
+        /*char accesslog[12 + REDIS_IP_STR_LEN + 6 + 20 + 50[>key len<]];*/
+        char accesslog[128];
+        if (c->argc == 1) {
+            snprintf(accesslog, 128, "Accesslog:(%s:%d) %s", (char *)c->remote_ip, c->remote_port, (char *)c->argv[0]->ptr);
+        } else if (c->argc == 2){
+            snprintf(accesslog, 128, "Accesslog:(%s:%d) %s %s", (char *)c->remote_ip, c->remote_port, (char *)c->argv[0]->ptr, (char *)c->argv[1]->ptr);
+        } else if (c->argc == 3){
+            snprintf(accesslog, 128, "Accesslog:(%s:%d) %s %s %s", (char *)c->remote_ip, c->remote_port, (char *)c->argv[0]->ptr, (char *)c->argv[1]->ptr, (char *)c->argv[2]->ptr);
+        } else {
+            snprintf(accesslog, 128, "Accesslog:(%s:%d) %s %s %s %s", c->remote_ip, c->remote_port,
+                    (char *)c->argv[0]->ptr, (char *)c->argv[1]->ptr,
+                    (char *)c->argv[2]->ptr, (char *)c->argv[3]->ptr);
+        }
+        redisLog(REDIS_WARNING, accesslog);
+    }
+
+    /*record trace keys*/
+    if (server.tracestates) {
+        recordTraceKeys(c);
+    }
+
     if (!strcasecmp(c->argv[0]->ptr,"quit")) {
         addReply(c,shared.ok);
         c->flags |= REDIS_CLOSE_AFTER_REPLY;
@@ -2031,6 +2110,12 @@ int processCommand(redisClient *c) {
             addReply(c, shared.oomerr);
             return REDIS_OK;
         }
+    }
+
+
+    if (!strcasecmp(c->argv[0]->ptr, "config") && server.configaddress && strcmp(c->remote_ip, server.configaddress)) {
+        addReplyError(c,"The server can not process config Command for an unkown ip");
+        return REDIS_OK;
     }
 
     /* Don't accept write commands if there are problems persisting on disk
@@ -2260,6 +2345,93 @@ void authCommand(redisClient *c) {
     } else {
       c->authenticated = 0;
       addReplyError(c,"invalid password");
+    }
+}
+
+void traceaddCommand(redisClient *c) {
+    int i;
+    list *cmds = NULL;
+    if (server.tracestates) {
+        if (c->argc + dictSize(server.trace_keys) > REDIS_TRACE_KEY_LIMIT) {
+            addReplyError(c, "too meny trace keys");
+        } else {
+            for (i = 1; i < c->argc; i++) {
+                sds key = c->argv[i]->ptr;
+                if (dictFind(server.trace_keys, key) == NULL) {
+                    cmds = listCreate();
+                    dictAdd(server.trace_keys, sdsdup(key), cmds);
+                }
+            }
+            addReply(c, shared.ok);
+        }
+    } else {
+        addReplyMultiBulkLen(c, 1);
+        addReplyBulkCString(c,"Trace function is off now");
+    }
+}
+
+void tracedelCommand(redisClient *c) {
+    int i;
+    if (server.tracestates) {
+        for (i = 1; i < c->argc; i++) {
+            sds key = c->argv[i]->ptr;
+            if (dictFind(server.trace_keys, key) != NULL) {
+                dictDelete(server.trace_keys, key);
+            }
+        } 
+        addReply(c, shared.ok);
+    } else {
+        addReplyMultiBulkLen(c, 1);
+        addReplyBulkCString(c,"Trace function is off now");
+    }
+}
+
+void tracekeysCommand(redisClient *c) {
+    if (server.tracestates) {
+        dictIterator *di = dictGetIterator(server.trace_keys);
+        dictEntry *de;
+        
+        /*show all keys that being traced(only show keys)*/
+        addReplyMultiBulkLen(c, dictSize(server.trace_keys)); 
+        while((de = dictNext(di)) != NULL) {
+            sds key = dictGetKey(de);
+            addReplyBulkCString(c,key);
+        }
+        dictReleaseIterator(di);
+    } else {
+        addReplyMultiBulkLen(c, 1);
+        addReplyBulkCString(c,"Trace function is off now");
+    }
+}
+
+void traceshowCommand(redisClient *c) {
+    if (server.tracestates) {
+        dictIterator *di = dictGetIterator(server.trace_keys);
+        dictEntry *de;
+        list *cmds = NULL;
+        listNode *node;
+        sds buf = sdsempty();
+        
+        /*show single key and its command trace*/
+        sds key = c->argv[1]->ptr;
+        if ((de = dictFind(server.trace_keys, key)) != NULL) {
+            cmds = dictGetVal(de);
+            addReplyMultiBulkLen(c, listLength(cmds));
+            node = listFirst(cmds);
+            while (node) {
+                sds cmd = listNodeValue(node);
+                addReplyBulkCString(c,cmd);
+                node = listNextNode(node); 
+            }
+        } else {
+            addReplyError(c, "trace key is not in trace list");
+        }
+
+        dictReleaseIterator(di);
+        sdsfree(buf);
+    } else {
+        addReplyMultiBulkLen(c, 1);
+        addReplyBulkCString(c,"Trace function is off now");
     }
 }
 

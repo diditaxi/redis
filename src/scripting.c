@@ -713,7 +713,7 @@ void scriptingInit(void) {
      * Note: there is no need to create it again when this function is called
      * by scriptingReset(). */
     if (server.lua_client == NULL) {
-        server.lua_client = createClient(-1);
+        server.lua_client = createClient(-1, NULL, 0);
         server.lua_client->flags |= REDIS_LUA_CLIENT;
     }
 

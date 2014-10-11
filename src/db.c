@@ -246,6 +246,10 @@ void signalFlushedDb(int dbid) {
  *----------------------------------------------------------------------------*/
 
 void flushdbCommand(redisClient *c) {
+    if (!server.flushable) {
+        addReply(c, shared.err);
+        return;
+    }
     server.dirty += dictSize(c->db->dict);
     signalFlushedDb(c->db->id);
     dictEmpty(c->db->dict,NULL);
@@ -254,6 +258,10 @@ void flushdbCommand(redisClient *c) {
 }
 
 void flushallCommand(redisClient *c) {
+    if (!server.flushable) {
+        addReply(c, shared.err);
+        return;
+    }
     signalFlushedDb(-1);
     server.dirty += emptyDb(NULL);
     addReply(c,shared.ok);
