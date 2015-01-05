@@ -5,10 +5,6 @@
 #define _BSD_SOURCE
 #endif
 
-#if defined(_AIX)
-#define _ALL_SOURCE
-#endif
-
 #if defined(__sun__)
 #define _POSIX_C_SOURCE 200112L
 #elif defined(__linux__) || defined(__OpenBSD__) || defined(__NetBSD__)

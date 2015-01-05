@@ -120,7 +120,6 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REDIS_DEFAULT_MAXMEMORY_SAMPLES 3
 #define REDIS_DEFAULT_AOF_FILENAME "appendonly.aof"
 #define REDIS_DEFAULT_AOF_NO_FSYNC_ON_REWRITE 0
-#define REDIS_DEFAULT_AOF_LOAD_TRUNCATED 1
 #define REDIS_DEFAULT_ACTIVE_REHASHING 1
 #define REDIS_DEFAULT_AOF_REWRITE_INCREMENTAL_FSYNC 1
 #define REDIS_DEFAULT_MIN_SLAVES_TO_WRITE 0
@@ -240,8 +239,6 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REDIS_FORCE_AOF (1<<14)   /* Force AOF propagation of current cmd. */
 #define REDIS_FORCE_REPL (1<<15)  /* Force replication of current cmd. */
 #define REDIS_PRE_PSYNC (1<<16)   /* Instance don't understand PSYNC. */
-#define REDIS_READONLY (1<<17)    /* Cluster client is in read-only state. */
-#define REDIS_PUBSUB (1<<18)      /* Client is in Pub/Sub mode. */
 
 /* Client request types */
 #define REDIS_REQ_INLINE 1
@@ -410,12 +407,19 @@ typedef struct redisObject {
     _var.ptr = _ptr; \
 } while(0);
 
+void crc32_init();
+uint32_t crc32_checksum(const char *buf, int len);
+
+#define HASH_SLOTS_MASK 0x000003ff
+#define HASH_SLOTS_SIZE (HASH_SLOTS_MASK + 1)
+
 typedef struct redisDb {
     dict *dict;                 /* The keyspace for this DB */
     dict *expires;              /* Timeout of keys with a timeout set */
     dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP) */
     dict *ready_keys;           /* Blocked keys that received a PUSH */
     dict *watched_keys;         /* WATCHED keys for MULTI/EXEC CAS */
+    dict *hash_slots[HASH_SLOTS_SIZE];
     int id;
     long long avg_ttl;          /* Average TTL, just for stats */
 } redisDb;
@@ -460,7 +464,7 @@ typedef struct readyList {
 } readyList;
 
 /* With multiplexing we need to take per-client state.
- * Clients are taken in a linked list. */
+ * Clients are taken in a liked list. */
 typedef struct redisClient {
     uint64_t id;            /* Client incremental unique ID. */
     int fd;
@@ -583,12 +587,6 @@ typedef struct redisOpArray {
  * Global server state
  *----------------------------------------------------------------------------*/
 
-/* AIX defines hz to __hz, we don't use this define and in order to allow
- * Redis build on AIX we need to undef it. */
-#ifdef _AIX
-#undef hz
-#endif
-
 struct redisServer {
     /* General */
     char *configfile;           /* Absolute config file path, or NULL */
@@ -621,6 +619,7 @@ struct redisServer {
     list *slaves, *monitors;    /* List of slaves and MONITORs */
     redisClient *current_client; /* Current client, only used on crash report */
     char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
+    dict *slotsmgrt_cached_sockfds;
     uint64_t next_client_id;    /* Next client unique ID. Incremental. */
     /* RDB / AOF loading information */
     int loading;                /* We are loading data from disk if true */
@@ -690,7 +689,6 @@ struct redisServer {
     int aof_rewrite_incremental_fsync;/* fsync incrementally while rewriting? */
     int aof_last_write_status;      /* REDIS_OK or REDIS_ERR */
     int aof_last_write_errno;       /* Valid if aof_last_write_status is ERR */
-    int aof_load_truncated;         /* Don't stop on unexpected AOF EOF. */
     /* RDB persistence */
     long long dirty;                /* Changes to DB from the last save */
     long long dirty_before_bgsave;  /* Used to restore dirty on failed BGSAVE */
@@ -756,9 +754,9 @@ struct redisServer {
     /* Replication script cache. */
     dict *repl_scriptcache_dict;        /* SHA1 all slaves are aware of. */
     list *repl_scriptcache_fifo;        /* First in, first out LRU eviction. */
-    unsigned int repl_scriptcache_size; /* Max number of elements. */
+    int repl_scriptcache_size;          /* Max number of elements. */
     /* Limits */
-    unsigned int maxclients;            /* Max number of simultaneous clients */
+    int maxclients;                 /* Max number of simultaneous clients */
     unsigned long long maxmemory;   /* Max number of memory bytes to use */
     int maxmemory_policy;           /* Policy for key eviction */
     int maxmemory_samples;          /* Pricision of random sampling */
@@ -928,10 +926,11 @@ void freeClient(redisClient *c);
 void freeClientAsync(redisClient *c);
 void resetClient(redisClient *c);
 void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask);
+void addReply(redisClient *c, robj *obj);
 void *addDeferredMultiBulkLength(redisClient *c);
 void setDeferredMultiBulkLength(redisClient *c, void *node, long length);
+void addReplySds(redisClient *c, sds s);
 void processInputBuffer(redisClient *c);
-void acceptHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask);
@@ -939,6 +938,7 @@ void addReplyBulk(redisClient *c, robj *obj);
 void addReplyBulkCString(redisClient *c, char *s);
 void addReplyBulkCBuffer(redisClient *c, void *p, size_t len);
 void addReplyBulkLongLong(redisClient *c, long long ll);
+void acceptHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void addReply(redisClient *c, robj *obj);
 void addReplySds(redisClient *c, sds s);
 void addReplyError(redisClient *c, char *err);
@@ -1131,7 +1131,7 @@ void redisLog(int level, const char *fmt, ...);
 #endif
 void redisLogRaw(int level, const char *msg);
 void redisLogFromHandler(int level, const char *msg);
-void usage(void);
+void usage();
 void updateDictResizePolicy(void);
 int htNeedsResize(dict *dict);
 void oom(const char *msg);
@@ -1190,7 +1190,7 @@ sds keyspaceEventsFlagsToString(int flags);
 /* Configuration */
 void loadServerConfig(char *filename, char *options);
 void appendServerSaveParams(time_t seconds, int changes);
-void resetServerSaveParams(void);
+void resetServerSaveParams();
 struct rewriteConfigState; /* Forward declaration to export API. */
 void rewriteConfigRewriteLine(struct rewriteConfigState *state, char *option, sds line, int force);
 int rewriteConfig(char *path);
@@ -1399,6 +1399,19 @@ void pfcountCommand(redisClient *c);
 void pfmergeCommand(redisClient *c);
 void pfdebugCommand(redisClient *c);
 void latencyCommand(redisClient *c);
+void slotsinfoCommand(redisClient *c);
+void slotsdelCommand(redisClient *c);
+void slotsmgrtslotCommand(redisClient *c);
+void slotsmgrtoneCommand(redisClient *c);
+void slotsmgrttagslotCommand(redisClient *c);
+void slotsmgrttagoneCommand(redisClient *c);
+void slotshashkeyCommand(redisClient *c);
+void slotscheckCommand(redisClient *c);
+void slotsrestoreCommand(redisClient *c);
+
+void slotsmgrt_cleanup();
+void *slots_tag(const sds s, int *plen);
+int slots_num(const sds s, uint32_t *pcrc);
 
 #if defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__ ((deprecated));

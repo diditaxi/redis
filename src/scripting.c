@@ -212,7 +212,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     static robj **argv = NULL;
     static int argv_size = 0;
     static robj *cached_objects[LUA_CMD_OBJCACHE_SIZE];
-    static size_t cached_objects_len[LUA_CMD_OBJCACHE_SIZE];
+    static int cached_objects_len[LUA_CMD_OBJCACHE_SIZE];
 
     /* Require at least one argument */
     if (argc == 0) {
@@ -222,7 +222,9 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     }
 
     /* Build the arguments vector */
-    if (argv_size < argc) {
+    if (!argv) {
+        argv = zmalloc(sizeof(robj*)*argc);
+    } else if (argv_size < argc) {
         argv = zrealloc(argv,sizeof(robj*)*argc);
         argv_size = argc;
     }
@@ -399,7 +401,6 @@ cleanup:
     if (c->argv != argv) {
         zfree(c->argv);
         argv = NULL;
-        argv_size = 0;
     }
 
     if (raise_error) {
@@ -716,7 +717,7 @@ void scriptingInit(void) {
         server.lua_client->flags |= REDIS_LUA_CLIENT;
     }
 
-    /* Lua beginners often don't use "local", this is likely to introduce
+    /* Lua beginners ofter don't use "local", this is likely to introduce
      * subtle bugs in their code. To prevent problems we protect accesses
      * to global variables. */
     scriptingEnableGlobalsProtection(lua);
@@ -907,9 +908,6 @@ void evalGenericCommand(redisClient *c, int evalsha) {
         return;
     if (numkeys > (c->argc - 3)) {
         addReplyError(c,"Number of keys can't be greater than number of args");
-        return;
-    } else if (numkeys < 0) {
-        addReplyError(c,"Number of keys can't be negative");
         return;
     }
 

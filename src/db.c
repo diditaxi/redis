@@ -32,9 +32,6 @@
 #include <signal.h>
 #include <ctype.h>
 
-void SlotToKeyAdd(robj *key);
-void SlotToKeyDel(robj *key);
-
 /*-----------------------------------------------------------------------------
  * C-level DB API
  *----------------------------------------------------------------------------*/
@@ -90,7 +87,14 @@ robj *lookupKeyWriteOrReply(redisClient *c, robj *key, robj *reply) {
  * The program is aborted if the key already exists. */
 void dbAdd(redisDb *db, robj *key, robj *val) {
     sds copy = sdsdup(key->ptr);
+
     int retval = dictAdd(db->dict, copy, val);
+
+    do {
+        uint32_t crc;
+        int slot = slots_num(key->ptr, &crc);
+        dictAdd(db->hash_slots[slot], sdsdup(key->ptr), (void *)(long)crc);
+    } while (0);
 
     redisAssertWithInfo(NULL,key,retval == REDIS_OK);
     if (val->type == REDIS_LIST) signalListAsReady(db, key);
@@ -160,6 +164,12 @@ int dbDelete(redisDb *db, robj *key) {
     /* Deleting an entry from the expires dict will not free the sds of
      * the key, because it is shared with the main dictionary. */
     if (dictSize(db->expires) > 0) dictDelete(db->expires,key->ptr);
+
+    do {
+        int slot = slots_num(key->ptr, NULL);
+        dictDelete(db->hash_slots[slot], key->ptr);
+    } while (0);
+
     if (dictDelete(db->dict,key->ptr) == DICT_OK) {
         return 1;
     } else {
@@ -206,11 +216,14 @@ robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o) {
 }
 
 long long emptyDb(void(callback)(void*)) {
-    int j;
+    int i, j;
     long long removed = 0;
-
+    
     for (j = 0; j < server.dbnum; j++) {
         removed += dictSize(server.db[j].dict);
+        for (i = 0; i < HASH_SLOTS_SIZE; i ++) {
+            dictEmpty(server.db[j].hash_slots[i], NULL);
+        }
         dictEmpty(server.db[j].dict,callback);
         dictEmpty(server.db[j].expires,callback);
     }
@@ -246,8 +259,12 @@ void signalFlushedDb(int dbid) {
  *----------------------------------------------------------------------------*/
 
 void flushdbCommand(redisClient *c) {
+    int i;
     server.dirty += dictSize(c->db->dict);
     signalFlushedDb(c->db->id);
+    for (i = 0; i < HASH_SLOTS_SIZE; i ++) {
+        dictEmpty(c->db->hash_slots[i], NULL);
+    }
     dictEmpty(c->db->dict,NULL);
     dictEmpty(c->db->expires,NULL);
     addReply(c,shared.ok);
@@ -411,7 +428,9 @@ int parseScanCursorOrReply(redisClient *c, robj *o, unsigned long *cursor) {
  * In the case of a Hash object the function returns both the field and value
  * of every element on the Hash. */
 void scanGenericCommand(redisClient *c, robj *o, unsigned long cursor) {
+    int rv;
     int i, j;
+    char buf[REDIS_LONGSTR_SIZE];
     list *keys = listCreate();
     listNode *node, *nextnode;
     long count = 10;
@@ -483,11 +502,6 @@ void scanGenericCommand(redisClient *c, robj *o, unsigned long cursor) {
 
     if (ht) {
         void *privdata[2];
-        /* We set the max number of iterations to ten times the specified
-         * COUNT, so if the hash table is in a pathological state (very
-         * sparsely populated) we avoid to block too much time at the cost
-         * of returning no or very few elements. */
-        long maxiterations = count*10;
 
         /* We pass two pointers to the callback: the list to which it will
          * add new elements, and the object containing the dictionary so that
@@ -496,9 +510,7 @@ void scanGenericCommand(redisClient *c, robj *o, unsigned long cursor) {
         privdata[1] = o;
         do {
             cursor = dictScan(ht, cursor, scanCallback, privdata);
-        } while (cursor &&
-              maxiterations-- &&
-              listLength(keys) < (unsigned long)count);
+        } while (cursor && listLength(keys) < count);
     } else if (o->type == REDIS_SET) {
         int pos = 0;
         int64_t ll;
@@ -572,7 +584,9 @@ void scanGenericCommand(redisClient *c, robj *o, unsigned long cursor) {
 
     /* Step 4: Reply to the client. */
     addReplyMultiBulkLen(c, 2);
-    addReplyBulkLongLong(c,cursor);
+    rv = snprintf(buf, sizeof(buf), "%lu", cursor);
+    redisAssert(rv < sizeof(buf));
+    addReplyBulkCBuffer(c, buf, rv);
 
     addReplyMultiBulkLen(c, listLength(keys));
     while ((node = listFirst(keys)) != NULL) {
@@ -646,7 +660,14 @@ void shutdownCommand(redisClient *c) {
      * Also when in Sentinel mode clear the SAVE flag and force NOSAVE. */
     if (server.loading || server.sentinel_mode)
         flags = (flags & ~REDIS_SHUTDOWN_SAVE) | REDIS_SHUTDOWN_NOSAVE;
-    if (prepareForShutdown(flags) == REDIS_OK) exit(0);
+    if (prepareForShutdown(flags) == REDIS_OK) {
+        for (int j = 0; j < server.dbnum; j ++) {
+            for (int i = 0; i < HASH_SLOTS_SIZE; i ++) {
+                dictRelease(server.db[j].hash_slots[i]);
+            }
+        }
+        exit(0);
+    }
     addReplyError(c,"Errors trying to SHUTDOWN. Check logs.");
 }
 
@@ -700,16 +721,11 @@ void moveCommand(redisClient *c) {
     robj *o;
     redisDb *src, *dst;
     int srcid;
-    long long dbid;
 
     /* Obtain source and target DB pointers */
     src = c->db;
     srcid = c->db->id;
-
-    if (getLongLongFromObject(c->argv[2],&dbid) == REDIS_ERR ||
-        dbid < INT_MIN || dbid > INT_MAX ||
-        selectDb(c,dbid) == REDIS_ERR)
-    {
+    if (selectDb(c,atoi(c->argv[2]->ptr)) == REDIS_ERR) {
         addReply(c,shared.outofrangeerr);
         return;
     }

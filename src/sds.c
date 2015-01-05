@@ -43,7 +43,7 @@
  * The string is always null-termined (all the sds strings are, always) so
  * even if you create an sds string with:
  *
- * mystring = sdsnewlen("abc",3);
+ * mystring = sdsnewlen("abc",3");
  *
  * You can print the string with printf() as there is an implicit \0 at the
  * end of the string. However the string is binary safe and can contain
@@ -109,7 +109,7 @@ void sdsupdatelen(sds s) {
     sh->len = reallen;
 }
 
-/* Modify an sds string in-place to make it empty (zero length).
+/* Modify an sds string on-place to make it empty (zero length).
  * However all the existing buffer is not discarded but set as free space
  * so that next append operations will not require allocations up to the
  * number of bytes previously available. */
@@ -200,12 +200,10 @@ size_t sdsAllocSize(sds s) {
 void sdsIncrLen(sds s, int incr) {
     struct sdshdr *sh = (void*) (s-(sizeof(struct sdshdr)));
 
-    if (incr >= 0)
-        assert(sh->free >= (unsigned int)incr);
-    else
-        assert(sh->len >= (unsigned int)(-incr));
+    assert(sh->free >= incr);
     sh->len += incr;
     sh->free -= incr;
+    assert(sh->free >= 0);
     s[sh->len] = '\0';
 }
 
@@ -390,7 +388,6 @@ sds sdscatvprintf(sds s, const char *fmt, va_list ap) {
         buf[buflen-2] = '\0';
         va_copy(cpy,ap);
         vsnprintf(buf, buflen, fmt, cpy);
-        va_end(ap);
         if (buf[buflen-2] != '\0') {
             if (buf != staticbuf) zfree(buf);
             buflen *= 2;
@@ -460,7 +457,7 @@ sds sdscatfmt(sds s, char const *fmt, ...) {
     i = initlen; /* Position of the next byte to write to dest str. */
     while(*f) {
         char next, *str;
-        unsigned int l;
+        int l;
         long long num;
         unsigned long long unum;
 

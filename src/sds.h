@@ -39,8 +39,8 @@
 typedef char *sds;
 
 struct sdshdr {
-    unsigned int len;
-    unsigned int free;
+    int len;
+    int free;
     char buf[];
 };
 

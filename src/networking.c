@@ -1028,7 +1028,7 @@ int processMultibulkBuffer(redisClient *c) {
                 qblen = sdslen(c->querybuf);
                 /* Hint the sds library about the amount of bytes this string is
                  * going to contain. */
-                if (qblen < (size_t)ll+2)
+                if (qblen < ll+2)
                     c->querybuf = sdsMakeRoomFor(c->querybuf,ll+2-qblen);
             }
             c->bulklen = ll;
@@ -1204,9 +1204,9 @@ void formatPeerId(char *peerid, size_t peerid_len, char *ip, int port) {
 }
 
 /* A Redis "Peer ID" is a colon separated ip:port pair.
- * For IPv4 it's in the form x.y.z.k:port, example: "127.0.0.1:1234".
+ * For IPv4 it's in the form x.y.z.k:pork, example: "127.0.0.1:1234".
  * For IPv6 addresses we use [] around the IP part, like in "[::1]:1234".
- * For Unix sockets we use path:0, like in "/tmp/redis:0".
+ * For Unix socekts we use path:0, like in "/tmp/redis:0".
  *
  * A Peer ID always fits inside a buffer of REDIS_PEER_ID_LEN bytes, including
  * the null term.
@@ -1233,7 +1233,7 @@ int genClientPeerId(redisClient *client, char *peerid, size_t peerid_len) {
 }
 
 /* This function returns the client peer id, by creating and caching it
- * if client->peerid is NULL, otherwise returning the cached value.
+ * if client->perrid is NULL, otherwise returning the cached value.
  * The Peer ID never changes during the life of the client, however it
  * is expensive to compute. */
 char *getClientPeerId(redisClient *c) {
@@ -1527,7 +1527,7 @@ unsigned long getClientOutputBufferMemoryUsage(redisClient *c) {
 int getClientType(redisClient *c) {
     if ((c->flags & REDIS_SLAVE) && !(c->flags & REDIS_MONITOR))
         return REDIS_CLIENT_TYPE_SLAVE;
-    if (c->flags & REDIS_PUBSUB)
+    if (dictSize(c->pubsub_channels) || listLength(c->pubsub_patterns))
         return REDIS_CLIENT_TYPE_PUBSUB;
     return REDIS_CLIENT_TYPE_NORMAL;
 }

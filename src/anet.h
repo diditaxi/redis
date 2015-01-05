@@ -39,12 +39,8 @@
 #define ANET_NONE 0
 #define ANET_IP_ONLY (1<<0)
 
-#if defined(__sun) || defined(_AIX)
+#if defined(__sun)
 #define AF_LOCAL AF_UNIX
-#endif
-
-#ifdef _AIX
-#undef ip_len
 #endif
 
 int anetTcpConnect(char *err, char *addr, int port);

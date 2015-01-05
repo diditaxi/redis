@@ -4,7 +4,7 @@
 # instances.
 #
 # Copyright (C) 2014 Salvatore Sanfilippo antirez@gmail.com
-# This software is released under the BSD License. See the COPYING file for
+# This softare is released under the BSD License. See the COPYING file for
 # more information.
 
 package require Tcl 8.5
