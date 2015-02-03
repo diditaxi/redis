@@ -2164,7 +2164,10 @@ int processCommand(redisClient *c) {
     }
 
 
-    if (!strcasecmp(c->argv[0]->ptr, "config") && server.configaddress && strcmp(c->remote_ip, server.configaddress)) {
+    if (strcmp(c->remote_ip, "127.0.0.1") &&
+            !strcasecmp(c->argv[0]->ptr, "config") && 
+            server.configaddress && 
+            strcmp(c->remote_ip, server.configaddress)) {
         addReplyError(c,"The server can not process config Command for an unkown ip");
         return REDIS_OK;
     }
