@@ -238,6 +238,44 @@ void loadServerConfigFromString(char *config) {
                 sdsfreesplitres(lines,totlines);
             }
             server.access_whitelist_file = zstrdup(argv[1]);
+        } else if (!strcasecmp(argv[0],"config_whitelist_file") && argc == 2 ) {
+            /* Load the file content */
+            char *filename = argv[1];
+            if (filename) {
+                int totlines, i;
+                sds *lines;
+                sds iplist = sdsempty();
+                char buf[REDIS_CONFIGLINE_MAX+1];
+
+                FILE *fp;
+                if ((fp = fopen(filename,"r")) == NULL) {
+                    err = "argument must be a readable file path"; 
+                    goto loaderr;
+                }
+                while(fgets(buf,REDIS_CONFIGLINE_MAX+1,fp) != NULL) {
+                    iplist = sdscat(iplist,buf);
+                }
+                fclose(fp);
+             
+                lines = sdssplitlen(iplist,strlen(iplist),"\n",1,&totlines);
+
+                server.config_whitelist = dictCreate(&optionSetDictType, NULL);
+                for (i = 0; i < totlines; i++) {
+                    if (sdslen(lines[i]) == 0) {
+                        continue;
+                    }
+                    if (strlen(lines[i]) > REDIS_IP_STR_LEN - 1 ||
+                            dictAdd(server.config_whitelist, sdsdup(lines[i]), NULL) != DICT_OK) {
+                        err = "whitelist ip addr in config file format wrong";
+                        dictRelease(server.config_whitelist);
+                        server.config_whitelist = NULL;
+                        goto loaderr;
+                    }
+                }
+                sdsfree(iplist);
+                sdsfreesplitres(lines,totlines);
+            }
+            server.config_whitelist_file = zstrdup(argv[1]);
         } else if (!strcasecmp(argv[0],"syslog-enabled") && argc == 2) {
             if ((server.syslog_enabled = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
@@ -668,6 +706,42 @@ void configSetCommand(redisClient *c) {
         }
         zfree(server.access_whitelist_file);
         server.access_whitelist_file = ((char*)o->ptr)[0] ? zstrdup(o->ptr) : NULL;
+    } else if (!strcasecmp(c->argv[2]->ptr, "config_whitelist_file")) {
+        char *filename = o->ptr;
+        if (filename) {
+            sds iplist = sdsempty();
+            char buf[REDIS_CONFIGLINE_MAX+1];
+
+            FILE *fp;
+            if ((fp = fopen(filename,"r")) == NULL) {
+                goto badfmt;
+            }
+            while(fgets(buf,REDIS_CONFIGLINE_MAX+1,fp) != NULL) {
+                iplist = sdscat(iplist,buf);
+            }
+            fclose(fp);
+         
+            int totlines, i;
+            sds *lines;
+            lines = sdssplitlen(iplist,strlen(iplist),"\n",1,&totlines);
+            
+            dict *whitelist = dictCreate(&optionSetDictType, NULL);
+            for (i = 0; i < totlines; i++) {
+                if (strlen(lines[i]) > REDIS_IP_STR_LEN - 1 || 
+                        dictAdd(whitelist, sdsdup(lines[i]), NULL) != DICT_OK) {
+                    dictRelease(whitelist);
+                    goto badfmt;
+                }
+            }
+            sdsfree(iplist);
+            sdsfreesplitres(lines,totlines);
+            if (server.config_whitelist) {
+                dictEmpty(server.config_whitelist, NULL);
+            }
+            server.config_whitelist = whitelist;
+        }
+        zfree(server.config_whitelist_file);
+        server.config_whitelist_file = ((char*)o->ptr)[0] ? zstrdup(o->ptr) : NULL;
     } else if (!strcasecmp(c->argv[2]->ptr,"masterauth")) {
         zfree(server.masterauth);
         server.masterauth = ((char*)o->ptr)[0] ? zstrdup(o->ptr) : NULL;
@@ -1836,6 +1910,7 @@ int rewriteConfig(char *path) {
     rewriteConfigYesNoOption(state,"tracestates",server.tracestates,0);
     rewriteConfigStringOption(state,"configaddress",server.configaddress,REDIS_DEFAULT_CONFIG_ADDR);
     rewriteConfigStringOption(state,"access_whitelist_file",server.access_whitelist_file,"");
+    rewriteConfigStringOption(state,"config_whitelist_file",server.config_whitelist_file,"");
     rewriteConfigStringOption(state,"pidfile",server.pidfile,REDIS_DEFAULT_PID_FILE);
     rewriteConfigNumericalOption(state,"port",server.port,REDIS_SERVERPORT);
     rewriteConfigNumericalOption(state,"tcp-backlog",server.tcp_backlog,REDIS_TCP_BACKLOG);

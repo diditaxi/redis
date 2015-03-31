@@ -1409,6 +1409,8 @@ void initServerConfig() {
     server.accesslog = REDIS_ACCESSLOG_OFF;
     server.access_whitelist = NULL;
     server.access_whitelist_file = NULL;
+    server.config_whitelist = NULL;
+    server.config_whitelist_file = NULL;
     server.trace_keys = dictCreate(&commandlistDictType,NULL);
     server.trace_command_limit = REDIS_DEFAULT_TRACE_COMMAND_LIMIT;
     server.tracestates = REDIS_TRACE_OFF;
@@ -2163,6 +2165,10 @@ int processCommand(redisClient *c) {
         }
     }
 
+    if (server.config_whitelist && dictFind(server.config_whitelist, c->remote_ip) == NULL) {
+        addReplyError(c,"The server can not process config Command for an unkown ip");
+        return REDIS_OK;
+    }
 
     if (strcmp(c->remote_ip, "127.0.0.1") &&
             !strcasecmp(c->argv[0]->ptr, "config") && 

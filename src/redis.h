@@ -687,6 +687,8 @@ struct redisServer {
     int accesslog;                  /* True if want to print accesslog*/
     dict *access_whitelist;         /* Dict contains ip addresses can access this server*/
     char *access_whitelist_file;    /* Config file contains ip addresses can access this server*/
+    dict *config_whitelist;         /* Dict contains ip addresses can config this server*/
+    char *config_whitelist_file;    /* Config file contains ip addresses can config this server*/
     dict *trace_keys;               /* Dict contains keys to trace*/
     int trace_command_limit;        /* Limits of each trace key's commands number*/
     int tracestates;                /* True if trace function is on*/
