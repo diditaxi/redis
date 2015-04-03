@@ -2165,19 +2165,14 @@ int processCommand(redisClient *c) {
         }
     }
 
-    if (server.config_whitelist && dictFind(server.config_whitelist, c->remote_ip) == NULL) {
+    if (!strcasecmp(c->argv[0]->ptr, "config") && 
+            strcmp(c->remote_ip, "127.0.0.1") &&
+            server.config_whitelist && 
+            dictFind(server.config_whitelist, c->remote_ip) == NULL) {
         addReplyError(c,"The server can not process config Command for an unkown ip");
         return REDIS_OK;
     }
-
-    if (strcmp(c->remote_ip, "127.0.0.1") &&
-            !strcasecmp(c->argv[0]->ptr, "config") && 
-            server.configaddress && 
-            strcmp(c->remote_ip, server.configaddress)) {
-        addReplyError(c,"The server can not process config Command for an unkown ip");
-        return REDIS_OK;
-    }
-
+    
     /* Don't accept write commands if there are problems persisting on disk
      * and if this is a master instance. */
     if (((server.stop_writes_on_bgsave_err &&
