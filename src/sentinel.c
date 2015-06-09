@@ -2745,6 +2745,7 @@ numargserr:
 void sentinelInfoCommand(redisClient *c) {
     char *section = c->argc == 2 ? c->argv[1]->ptr : "default";
     sds info = sdsempty();
+    sds slaveinfo = sdsempty();
     int defsections = !strcasecmp(section,"default");
     int sections = 0;
 
@@ -2762,7 +2763,9 @@ void sentinelInfoCommand(redisClient *c) {
 
     if (!strcasecmp(section,"sentinel") || defsections) {
         dictIterator *di;
+        dictIterator *dislave;
         dictEntry *de;
+        dictEntry *deslave;
         int master_id = 0;
 
         if (sections++) info = sdscat(info,"\r\n");
@@ -2784,12 +2787,20 @@ void sentinelInfoCommand(redisClient *c) {
 
             if (ri->flags & SRI_O_DOWN) status = "odown";
             else if (ri->flags & SRI_S_DOWN) status = "sdown";
+    
+            dislave = dictGetIterator(ri->slaves);
+            while((deslave = dictNext(dislave)) != NULL) {
+                sentinelRedisInstance *slave = dictGetVal(deslave);
+                sdscatprintf(slaveinfo, "%s:%d ", slave->addr->ip, slave->addr->port);
+            }
+            dictReleaseIterator(dislave);
+
             info = sdscatprintf(info,
                 "master%d:name=%s,status=%s,address=%s:%d,"
-                "slaves=%lu,slave=%s:%d,sentinels=%lu\r\n",
+                "slaves=%lu,slave=%s,sentinels=%lu\r\n",
                 master_id++, ri->name, status,
                 ri->addr->ip, ri->addr->port,
-                dictSize(ri->slaves),ri->slave_master_host,ri->slave_master_port,
+                dictSize(ri->slaves), slaveinfo,
                 dictSize(ri->sentinels)+1);
         }
         dictReleaseIterator(di);
