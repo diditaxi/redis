@@ -2786,10 +2786,10 @@ void sentinelInfoCommand(redisClient *c) {
             else if (ri->flags & SRI_S_DOWN) status = "sdown";
             info = sdscatprintf(info,
                 "master%d:name=%s,status=%s,address=%s:%d,"
-                "slaves=%lu,sentinels=%lu\r\n",
+                "slaves=%lu,slave=%s:%d,sentinels=%lu\r\n",
                 master_id++, ri->name, status,
                 ri->addr->ip, ri->addr->port,
-                dictSize(ri->slaves),
+                dictSize(ri->slaves),ri->slave_master_host,ri->slave_master_port,
                 dictSize(ri->sentinels)+1);
         }
         dictReleaseIterator(di);
