@@ -2000,7 +2000,7 @@ int rewriteConfig(char *path) {
     rewriteConfigYesNoOption(state,"aof-rewrite-incremental-fsync",server.aof_rewrite_incremental_fsync,REDIS_DEFAULT_AOF_REWRITE_INCREMENTAL_FSYNC);
     rewriteConfigNumericalOption(state,"trace_command_limit",server.trace_command_limit,REDIS_DEFAULT_TRACE_COMMAND_LIMIT);
     rewriteConfigYesNoOption(state,"aof-load-truncated",server.aof_load_truncated,REDIS_DEFAULT_AOF_LOAD_TRUNCATED);
-    if (server.sentinel_mode) rewriteConfigSentinelOption(state);
+    /*if (server.sentinel_mode) rewriteConfigSentinelOption(state);*/
 
     /* Step 3: remove all the orphaned lines in the old file, that is, lines
      * that were used by a config option and are no longer used, like in case
