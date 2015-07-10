@@ -1232,6 +1232,35 @@ void configGetCommand(redisClient *c) {
         sdsfree(buf);
         matches++;
     }
+    
+    if (stringmatch(pattern,"config_whitelist_file",0)) {
+        dictEntry *de;
+        dictIterator *di; 
+            
+        sds buf = sdsempty();
+        buf = sdscatprintf(buf,"%s:|", server.config_whitelist_file);
+
+        di = dictGetIterator(server.config_whitelist);
+        while((de = dictNext(di)) != NULL) {                           
+            sds key = dictGetKey(de);
+            if (sdslen(key) == 0) {
+                continue;
+            }
+            buf = sdscatprintf(buf,"%s|", key);
+
+            /* Whether need this if condition? */
+            /* break when retrun list is too long */
+            if (sdslen(buf) > REDIS_CONFIGLINE_MAX) {
+                buf = sdscatprintf(buf,"..."); 
+            	break;
+            }
+        }        
+        dictReleaseIterator(di);
+        addReplyBulkCString(c, "config_whitelist_file");
+        addReplyBulkCString(c,buf);
+        sdsfree(buf);
+        matches++;
+    }
 
     if (stringmatch(pattern,"appendonly",0)) {
         addReplyBulkCString(c,"appendonly");

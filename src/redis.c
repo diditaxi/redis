@@ -2166,10 +2166,11 @@ int processCommand(redisClient *c) {
         }
     }
 
+    sds sds_remote_ip = sdsnew(c->remote_ip);
     if (!strcasecmp(c->argv[0]->ptr, "config") && 
             strcmp(c->remote_ip, "127.0.0.1") &&
             server.config_whitelist && 
-            dictFind(server.config_whitelist, c->remote_ip) == NULL) {
+            dictFind(server.config_whitelist, sds_remote_ip) == NULL) {
         addReplyError(c,"The server can not process config Command for an unkown ip");
         return REDIS_OK;
     }
