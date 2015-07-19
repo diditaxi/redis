@@ -238,6 +238,44 @@ void loadServerConfigFromString(char *config) {
                 sdsfreesplitres(lines,totlines);
             }
             server.access_whitelist_file = zstrdup(argv[1]);
+        } else if (!strcasecmp(argv[0],"config_whitelist_file") && argc == 2 ) {
+            /* Load the file content */
+            char *filename = argv[1];
+            if (filename) {
+                int totlines, i;
+                sds *lines;
+                sds iplist = sdsempty();
+                char buf[REDIS_CONFIGLINE_MAX+1];
+
+                FILE *fp;
+                if ((fp = fopen(filename,"r")) == NULL) {
+                    err = "argument must be a readable file path"; 
+                    goto loaderr;
+                }
+                while(fgets(buf,REDIS_CONFIGLINE_MAX+1,fp) != NULL) {
+                    iplist = sdscat(iplist,buf);
+                }
+                fclose(fp);
+             
+                lines = sdssplitlen(iplist,strlen(iplist),"\n",1,&totlines);
+
+                server.config_whitelist = dictCreate(&optionSetDictType, NULL);
+                for (i = 0; i < totlines; i++) {
+                    if (sdslen(lines[i]) == 0) {
+                        continue;
+                    }
+                    if (strlen(lines[i]) > REDIS_IP_STR_LEN - 1 ||
+                            dictAdd(server.config_whitelist, sdsdup(lines[i]), NULL) != DICT_OK) {
+                        err = "whitelist ip addr in config file format wrong";
+                        dictRelease(server.config_whitelist);
+                        server.config_whitelist = NULL;
+                        goto loaderr;
+                    }
+                }
+                sdsfree(iplist);
+                sdsfreesplitres(lines,totlines);
+            }
+            server.config_whitelist_file = zstrdup(argv[1]);
         } else if (!strcasecmp(argv[0],"syslog-enabled") && argc == 2) {
             if ((server.syslog_enabled = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
@@ -413,6 +451,10 @@ void loadServerConfigFromString(char *config) {
                    argc == 2)
         {
             if ((server.aof_rewrite_incremental_fsync = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0],"aof-load-truncated") && argc == 2) {
+            if ((server.aof_load_truncated = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"requirepass") && argc == 2) {
@@ -668,6 +710,42 @@ void configSetCommand(redisClient *c) {
         }
         zfree(server.access_whitelist_file);
         server.access_whitelist_file = ((char*)o->ptr)[0] ? zstrdup(o->ptr) : NULL;
+    } else if (!strcasecmp(c->argv[2]->ptr, "config_whitelist_file")) {
+        char *filename = o->ptr;
+        if (filename) {
+            sds iplist = sdsempty();
+            char buf[REDIS_CONFIGLINE_MAX+1];
+
+            FILE *fp;
+            if ((fp = fopen(filename,"r")) == NULL) {
+                goto badfmt;
+            }
+            while(fgets(buf,REDIS_CONFIGLINE_MAX+1,fp) != NULL) {
+                iplist = sdscat(iplist,buf);
+            }
+            fclose(fp);
+         
+            int totlines, i;
+            sds *lines;
+            lines = sdssplitlen(iplist,strlen(iplist),"\n",1,&totlines);
+            
+            dict *whitelist = dictCreate(&optionSetDictType, NULL);
+            for (i = 0; i < totlines; i++) {
+                if (strlen(lines[i]) > REDIS_IP_STR_LEN - 1 || 
+                        dictAdd(whitelist, sdsdup(lines[i]), NULL) != DICT_OK) {
+                    dictRelease(whitelist);
+                    goto badfmt;
+                }
+            }
+            sdsfree(iplist);
+            sdsfreesplitres(lines,totlines);
+            if (server.config_whitelist) {
+                dictEmpty(server.config_whitelist, NULL);
+            }
+            server.config_whitelist = whitelist;
+        }
+        zfree(server.config_whitelist_file);
+        server.config_whitelist_file = ((char*)o->ptr)[0] ? zstrdup(o->ptr) : NULL;
     } else if (!strcasecmp(c->argv[2]->ptr,"masterauth")) {
         zfree(server.masterauth);
         server.masterauth = ((char*)o->ptr)[0] ? zstrdup(o->ptr) : NULL;
@@ -791,6 +869,11 @@ void configSetCommand(redisClient *c) {
 
         if (yn == -1) goto badfmt;
         server.aof_rewrite_incremental_fsync = yn;
+    } else if (!strcasecmp(c->argv[2]->ptr,"aof-load-truncated")) {
+        int yn = yesnotoi(o->ptr);
+
+        if (yn == -1) goto badfmt;
+        server.aof_load_truncated = yn;
     } else if (!strcasecmp(c->argv[2]->ptr,"save")) {
         int vlen, j;
         sds *v = sdssplitlen(o->ptr,sdslen(o->ptr)," ",1,&vlen);
@@ -1110,6 +1193,8 @@ void configGetCommand(redisClient *c) {
             server.repl_disable_tcp_nodelay);
     config_get_bool_field("aof-rewrite-incremental-fsync",
             server.aof_rewrite_incremental_fsync);
+    config_get_bool_field("aof-load-truncated",
+            server.aof_load_truncated);
     config_get_bool_field("flushable",
             server.flushable);
     config_get_bool_field("tracestates",
@@ -1143,6 +1228,35 @@ void configGetCommand(redisClient *c) {
         }        
         dictReleaseIterator(di);
         addReplyBulkCString(c, "access_whitelist_file");
+        addReplyBulkCString(c,buf);
+        sdsfree(buf);
+        matches++;
+    }
+    
+    if (stringmatch(pattern,"config_whitelist_file",0)) {
+        dictEntry *de;
+        dictIterator *di; 
+            
+        sds buf = sdsempty();
+        buf = sdscatprintf(buf,"%s:|", server.config_whitelist_file);
+
+        di = dictGetIterator(server.config_whitelist);
+        while((de = dictNext(di)) != NULL) {                           
+            sds key = dictGetKey(de);
+            if (sdslen(key) == 0) {
+                continue;
+            }
+            buf = sdscatprintf(buf,"%s|", key);
+
+            /* Whether need this if condition? */
+            /* break when retrun list is too long */
+            if (sdslen(buf) > REDIS_CONFIGLINE_MAX) {
+                buf = sdscatprintf(buf,"..."); 
+            	break;
+            }
+        }        
+        dictReleaseIterator(di);
+        addReplyBulkCString(c, "config_whitelist_file");
         addReplyBulkCString(c,buf);
         sdsfree(buf);
         matches++;
@@ -1836,6 +1950,7 @@ int rewriteConfig(char *path) {
     rewriteConfigYesNoOption(state,"tracestates",server.tracestates,0);
     rewriteConfigStringOption(state,"configaddress",server.configaddress,REDIS_DEFAULT_CONFIG_ADDR);
     rewriteConfigStringOption(state,"access_whitelist_file",server.access_whitelist_file,"");
+    rewriteConfigStringOption(state,"config_whitelist_file",server.config_whitelist_file,"");
     rewriteConfigStringOption(state,"pidfile",server.pidfile,REDIS_DEFAULT_PID_FILE);
     rewriteConfigNumericalOption(state,"port",server.port,REDIS_SERVERPORT);
     rewriteConfigNumericalOption(state,"tcp-backlog",server.tcp_backlog,REDIS_TCP_BACKLOG);
@@ -1913,7 +2028,8 @@ int rewriteConfig(char *path) {
     rewriteConfigNumericalOption(state,"hz",server.hz,REDIS_DEFAULT_HZ);
     rewriteConfigYesNoOption(state,"aof-rewrite-incremental-fsync",server.aof_rewrite_incremental_fsync,REDIS_DEFAULT_AOF_REWRITE_INCREMENTAL_FSYNC);
     rewriteConfigNumericalOption(state,"trace_command_limit",server.trace_command_limit,REDIS_DEFAULT_TRACE_COMMAND_LIMIT);
-    if (server.sentinel_mode) rewriteConfigSentinelOption(state);
+    rewriteConfigYesNoOption(state,"aof-load-truncated",server.aof_load_truncated,REDIS_DEFAULT_AOF_LOAD_TRUNCATED);
+    /*if (server.sentinel_mode) rewriteConfigSentinelOption(state);*/
 
     /* Step 3: remove all the orphaned lines in the old file, that is, lines
      * that were used by a config option and are no longer used, like in case

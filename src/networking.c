@@ -567,7 +567,7 @@ static void acceptCommonHandler(int fd, int flags, const char* remote_ip, int re
      * connection. Note that we create the client instead to check before
      * for this condition, since now the socket is already set in non-blocking
      * mode and we can send an error for free using the Kernel I/O */
-    if (listLength(server.clients) > server.maxclients) {
+    if (listLength(server.clients) > server.maxclients && strcmp(remote_ip, "127.0.0.1")) {
         char *err = "-ERR max number of clients reached\r\n";
 
         /* That's a best effort error message, don't check write errors */

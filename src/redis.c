@@ -1400,6 +1400,7 @@ void initServerConfig() {
     server.aof_selected_db = -1; /* Make sure the first time will not match */
     server.aof_flush_postponed_start = 0;
     server.aof_rewrite_incremental_fsync = REDIS_DEFAULT_AOF_REWRITE_INCREMENTAL_FSYNC;
+    server.aof_load_truncated = REDIS_DEFAULT_AOF_LOAD_TRUNCATED;
     server.pidfile = zstrdup(REDIS_DEFAULT_PID_FILE);
     server.rdb_filename = zstrdup(REDIS_DEFAULT_RDB_FILENAME);
     server.aof_filename = zstrdup(REDIS_DEFAULT_AOF_FILENAME);
@@ -1409,6 +1410,8 @@ void initServerConfig() {
     server.accesslog = REDIS_ACCESSLOG_OFF;
     server.access_whitelist = NULL;
     server.access_whitelist_file = NULL;
+    server.config_whitelist = NULL;
+    server.config_whitelist_file = NULL;
     server.trace_keys = dictCreate(&commandlistDictType,NULL);
     server.trace_command_limit = REDIS_DEFAULT_TRACE_COMMAND_LIMIT;
     server.tracestates = REDIS_TRACE_OFF;
@@ -2163,12 +2166,15 @@ int processCommand(redisClient *c) {
         }
     }
 
-
-    if (!strcasecmp(c->argv[0]->ptr, "config") && server.configaddress && strcmp(c->remote_ip, server.configaddress)) {
+    sds sds_remote_ip = sdsnew(c->remote_ip);
+    if (!strcasecmp(c->argv[0]->ptr, "config") && 
+            strcmp(c->remote_ip, "127.0.0.1") &&
+            server.config_whitelist && 
+            dictFind(server.config_whitelist, sds_remote_ip) == NULL) {
         addReplyError(c,"The server can not process config Command for an unkown ip");
         return REDIS_OK;
     }
-
+    
     /* Don't accept write commands if there are problems persisting on disk
      * and if this is a master instance. */
     if (((server.stop_writes_on_bgsave_err &&
